@@ -1,24 +1,34 @@
-# ºöÂÔ Visual Studio µÄ»º´æÄ¿Â¼
+# Visual Studio ç¼“å­˜ç›®å½•
 .vs/
 
-# ºöÂÔ±àÒëÊä³ö
-build/
+# CMake ç”Ÿæˆçš„æ„å»ºç›®å½•ï¼ˆå¦‚æœä½ ç”¨å…¶ä»–ç›®å½•åï¼Œè¯·æ›¿æ¢ï¼‰
 out/
+build/
 CMakeFiles/
 CMakeCache.txt
+cmake_install.cmake
+Makefile
 
-# ºöÂÔÖĞ¼äÎÄ¼şºÍµ÷ÊÔĞÅÏ¢
+# ç¼–è¯‘ç”Ÿæˆçš„äºŒè¿›åˆ¶æ–‡ä»¶
 *.exe
 *.obj
 *.pdb
 *.lib
 *.dll
 
-# ºöÂÔÓÃ»§ÅäÖÃ
-*.suo
-*.user
-*.vcxproj.user
+# ä¸´æ—¶æ–‡ä»¶å’Œæ—¥å¿—
+*.log
+*.tmp
 
-# ºöÂÔÍâ²¿ÒÀÀµ£¨Èç¹ûÄã²»ÏëÌá½»Ô´Âë£©
-external/glfw/
-external/glad/
+# å¿½ç•¥å¤–éƒ¨ä¾èµ–æºç ï¼ˆæ ¹æ®éœ€è¦å†³å®šï¼‰
+# external/
+
+# ç”¨æˆ·é…ç½®æ–‡ä»¶
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# å…¶ä»–ç¼–è¾‘å™¨ä¸´æ—¶æ–‡ä»¶
+*.swp
+*~
