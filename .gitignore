@@ -1,0 +1,24 @@
+# 忽略 Visual Studio 的缓存目录
+.vs/
+
+# 忽略编译输出
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+
+# 忽略中间文件和调试信息
+*.exe
+*.obj
+*.pdb
+*.lib
+*.dll
+
+# 忽略用户配置
+*.suo
+*.user
+*.vcxproj.user
+
+# 忽略外部依赖（如果你不想提交源码）
+external/glfw/
+external/glad/
