@@ -4,6 +4,9 @@
 #include <GLFW/glfw3.h>
 #include <iostream>
 
+float y_offset = 0.0f;
+float x_offset = 0.0f;
+
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
@@ -12,27 +15,47 @@ void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
 void processInput(GLFWwindow* window) {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
         glfwSetWindowShouldClose(window, true);
+    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
+		y_offset += 0.01f; // 向上移动
+	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
+		y_offset -= 0.01f; // 向下移动
+	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
+		x_offset -= 0.01f; // 向左移动
+	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
+		x_offset += 0.01f; // 向右移动
+	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
+		y_offset = 0.0f; // 重置 Y 偏移
+		x_offset = 0.0f; // 重置 X 偏移
+	}
 }
 
-// 顶点着色器
+// ========== 顶点着色器（增加颜色传递） ==========
 const char* vertexShaderSource = R"(
     #version 330 core
     layout(location = 0) in vec2 aPos;
+    layout(location = 1) in vec3 aColor;
+
+    out vec3 vertexColor;
+
+    uniform vec2 offset;
 
     void main() {
-        gl_Position = vec4(aPos, 0.0, 1.0);
+        gl_Position = vec4(aPos + offset, 0.0, 1.0);
+        vertexColor = aColor;
     }
 )";
 
-// 片元着色器
+// ========== 片元着色器（接收颜色） ==========
 const char* fragmentShaderSource = R"(
     #version 330 core
+    in vec3 vertexColor;
     out vec4 FragColor;
 
     void main() {
-        FragColor = vec4(0.0, 1.0, 0.0, 1.0);  // 绿色
+        FragColor = vec4(vertexColor, 1.0); // 使用顶点颜色
     }
 )";
+
 
 int main() {
     // 初始化 GLFW
@@ -106,14 +129,14 @@ int main() {
 
     // ========== 4. 顶点数据（一个矩形由两个三角形组成） ==========
     float vertices[] = {
-        // x, y
-        -0.2f, -0.2f,
-         0.2f, -0.2f,
-         0.2f,  0.2f,
+        // 位置        // 颜色
+        -0.2f, -0.2f,   1.0f, 0.0f, 0.0f, // 左下 - 红
+         0.2f, -0.2f,   0.0f, 1.0f, 0.0f, // 右下 - 绿
+         0.2f,  0.2f,   0.0f, 0.0f, 1.0f, // 右上 - 蓝
 
-        -0.2f, -0.2f,
-         0.2f,  0.2f,
-        -0.2f,  0.2f,
+        -0.2f, -0.2f,   1.0f, 0.0f, 0.0f, // 左下 - 红
+         0.2f,  0.2f,   0.0f, 0.0f, 1.0f, // 右上 - 蓝
+        -0.2f,  0.2f,   1.0f, 1.0f, 0.0f  // 左上 - 黄
     };
 
     // ========== 5. 创建 VAO & VBO ==========
@@ -126,13 +149,20 @@ int main() {
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
-    // 位置属性
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    // 顶点位置: layout(location = 1)
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
+
+    // 顶点颜色: layout(location = 1)
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(2 * sizeof(float)));
+    glEnableVertexAttribArray(1);
 
     // ========== 6. 渲染循环 ==========
     while (!glfwWindowShouldClose(window)) {
-        processInput(window);
+		processInput(window);//获取x,y偏移
+
+		int offsetLocation = glGetUniformLocation(shaderProgram, "offset");//获取 uniform 位置
+        glUniform2f(offsetLocation, x_offset, y_offset);//
 
         glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -141,7 +171,7 @@ int main() {
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
-        //glfwSwapBuffers(window);
+        glfwSwapBuffers(window);
         glfwPollEvents();
     }
 

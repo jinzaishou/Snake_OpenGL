@@ -13,5 +13,6 @@
 # 学习笔记：
 	opengl是一个状态机
 	使用双缓冲区机制来进行绘图，具体代码：glfwSwapBuffers(window)//用于交换前后缓冲区。
+	使用 location = 1、2、3 是在顶点有多个属性（位置、颜色、纹理坐标等）时，为了明确告诉 OpenGL：“每个输入变量对应哪个通道”。使用glVertexAttribPointer()绑定通道，使用glEnableVertexAttribArray()启用顶点属性。
 
 	
