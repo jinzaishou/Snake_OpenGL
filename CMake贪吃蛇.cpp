@@ -1,8 +1,12 @@
-﻿#include "CMake贪吃蛇.h"
+﻿#define STB_IMAGE_IMPLEMENTATION
+#include "CMake贪吃蛇.h"
+#include "./external/stb/stb_image.h"
 
+#include <filesystem>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+
 
 float y_offset = 0.0f;
 float x_offset = 0.0f;
@@ -34,25 +38,32 @@ const char* vertexShaderSource = R"(
     #version 330 core
     layout(location = 0) in vec2 aPos;
     layout(location = 1) in vec3 aColor;
+    layout(location = 2) in vec2 aTexCoord;
 
     out vec3 vertexColor;
+    out vec2 texCoord;
 
     uniform vec2 offset;
 
     void main() {
         gl_Position = vec4(aPos + offset, 0.0, 1.0);
         vertexColor = aColor;
+        texCoord = aTexCoord;
     }
 )";
 
 // ========== 片元着色器（接收颜色） ==========
 const char* fragmentShaderSource = R"(
     #version 330 core
+    in vec2 texCoord;
     in vec3 vertexColor;
+
     out vec4 FragColor;
 
+    uniform sampler2D ourTexture;
+
     void main() {
-        FragColor = vec4(vertexColor, 1.0); // 使用顶点颜色
+        FragColor = texture(ourTexture, texCoord);
     }
 )";
 
@@ -129,14 +140,14 @@ int main() {
 
     // ========== 4. 顶点数据（一个矩形由两个三角形组成） ==========
     float vertices[] = {
-        // 位置        // 颜色
-        -0.2f, -0.2f,   1.0f, 0.0f, 0.0f, // 左下 - 红
-         0.2f, -0.2f,   0.0f, 1.0f, 0.0f, // 右下 - 绿
-         0.2f,  0.2f,   0.0f, 0.0f, 1.0f, // 右上 - 蓝
+        // 位置       // 颜色         // 纹理坐标
+        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   0.0f, 0.0f,
+         0.5f, -0.5f,  0.0f, 1.0f, 0.0f,   1.0f, 0.0f,
+         0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   1.0f, 1.0f,
 
-        -0.2f, -0.2f,   1.0f, 0.0f, 0.0f, // 左下 - 红
-         0.2f,  0.2f,   0.0f, 0.0f, 1.0f, // 右上 - 蓝
-        -0.2f,  0.2f,   1.0f, 1.0f, 0.0f  // 左上 - 黄
+        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   0.0f, 0.0f,
+         0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   1.0f, 1.0f,
+        -0.5f,  0.5f,  1.0f, 1.0f, 0.0f,   0.0f, 1.0f
     };
 
     // ========== 5. 创建 VAO & VBO ==========
@@ -150,24 +161,63 @@ int main() {
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
 
     // 顶点位置: layout(location = 1)
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
 
     // 顶点颜色: layout(location = 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 5 * sizeof(float), (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // ========== 6. 渲染循环 ==========
+    // 纹理坐标
+    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(5 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+
+    // ========== 6. 加载纹理 ==========
+
+    // 生成纹理对象
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    // 设置纹理参数
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    // 加载图像数据
+    int width, height, nrChannels;
+    stbi_set_flip_vertically_on_load(true); // OpenGL 的 Y 坐标是反的
+    std::cout << "当前工作目录：" << std::filesystem::current_path() << std::endl;
+    unsigned char* data = stbi_load("C:/dev/snake/CMake贪吃蛇/textures/snake.jpg", &width, &height, &nrChannels, 0);
+    if (data) {
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
+            nrChannels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+    else {
+        std::cerr << "纹理加载失败！" << std::endl;
+    }
+    stbi_image_free(data);
+
+
+
+
+    // ========== 7. 渲染循环 ==========
     while (!glfwWindowShouldClose(window)) {
 		processInput(window);//获取x,y偏移
 
 		int offsetLocation = glGetUniformLocation(shaderProgram, "offset");//获取 uniform 位置
+        int textureLocation = glGetUniformLocation(shaderProgram, "ourTexture");
+
+        glUniform1i(textureLocation, 0);
         glUniform2f(offsetLocation, x_offset, y_offset);//
 
         glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgram);
+        glBindTexture(GL_TEXTURE_2D, texture); // 绑定纹理
         glBindVertexArray(VAO);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
