@@ -1,235 +1,233 @@
 ﻿#define STB_IMAGE_IMPLEMENTATION
-#include "CMake贪吃蛇.h"
 #include "./external/stb/stb_image.h"
 
+#include <deque>
 #include <filesystem>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include <cstdlib>
+#include <ctime>
 
+const int gridWidth = 20;
+const int gridHeight = 20;
+const float cellSize = 2.0f / gridWidth;
 
-float y_offset = 0.0f;
-float x_offset = 0.0f;
+struct Vec2i {
+    int x, y;
+    bool operator==(const Vec2i& other) const { return x == other.x && y == other.y; }
+};
+std::deque<Vec2i> snake = { {10, 7} };
+Vec2i direction = { 1, 0 };
+Vec2i food = { 5, 5 };
+
+float moveInterval = 0.2f;
+float toRadians(float degree) { return degree * 3.14159265f / 180.0f; }
 
 void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     glViewport(0, 0, width, height);
 }
-
-// 处理输入
 void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
-        glfwSetWindowShouldClose(window, true);
-    if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS)
-		y_offset += 0.01f; // 向上移动
-	if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS)
-		y_offset -= 0.01f; // 向下移动
-	if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS)
-		x_offset -= 0.01f; // 向左移动
-	if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS)
-		x_offset += 0.01f; // 向右移动
-	if (glfwGetKey(window, GLFW_KEY_SPACE) == GLFW_PRESS) {
-		y_offset = 0.0f; // 重置 Y 偏移
-		x_offset = 0.0f; // 重置 X 偏移
-	}
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)    direction = { 0, 1 };
+    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)  direction = { 0, -1 };
+    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)  direction = { -1, 0 };
+    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) direction = { 1, 0 };
 }
 
-// ========== 顶点着色器（增加颜色传递） ==========
+// 顶点着色器
 const char* vertexShaderSource = R"(
-    #version 330 core
-    layout(location = 0) in vec2 aPos;
-    layout(location = 1) in vec3 aColor;
-    layout(location = 2) in vec2 aTexCoord;
+#version 330 core
+layout(location = 0) in vec2 aPos;
+layout(location = 1) in vec2 aTexCoord;
 
-    out vec3 vertexColor;
-    out vec2 texCoord;
+out vec2 texCoord;
 
-    uniform vec2 offset;
+uniform vec2 offset;
+uniform float angle;
 
-    void main() {
-        gl_Position = vec4(aPos + offset, 0.0, 1.0);
-        vertexColor = aColor;
-        texCoord = aTexCoord;
-    }
+void main() {
+    float cosA = cos(angle);
+    float sinA = sin(angle);
+    mat2 rotation = mat2(cosA, -sinA, sinA, cosA);
+    vec2 rotatedPos = rotation * aPos;
+    gl_Position = vec4(rotatedPos + offset, 0.0, 1.0);
+    texCoord = aTexCoord;
+}
 )";
 
-// ========== 片元着色器（接收颜色） ==========
+// 片元着色器
 const char* fragmentShaderSource = R"(
-    #version 330 core
-    in vec2 texCoord;
-    in vec3 vertexColor;
-
-    out vec4 FragColor;
-
-    uniform sampler2D ourTexture;
-
-    void main() {
-        FragColor = texture(ourTexture, texCoord);
-    }
+#version 330 core
+in vec2 texCoord;
+out vec4 FragColor;
+uniform sampler2D ourTexture;
+void main() {
+    FragColor = texture(ourTexture, texCoord);
+}
 )";
 
+// 加载纹理函数
+GLuint loadTexture(const char* path) {
+    GLuint texture;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    int width, height, nrChannels;
+    stbi_set_flip_vertically_on_load(true);
+    unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
+    if (data) {
+        glTexImage2D(GL_TEXTURE_2D, 0, (nrChannels == 4 ? GL_RGBA : GL_RGB),
+            width, height, 0, (nrChannels == 4 ? GL_RGBA : GL_RGB),
+            GL_UNSIGNED_BYTE, data);
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+    else {
+        std::cerr << "纹理加载失败: " << path << std::endl;
+    }
+    stbi_image_free(data);
+    return texture;
+}
 
 int main() {
-    // 初始化 GLFW
-    if (!glfwInit()) {
-        std::cerr << "GLFW 初始化失败\n";
-        return -1;
-    }
-
-    // 设置 OpenGL 版本
+    srand((unsigned)time(0));
+    if (!glfwInit()) return -1;
     glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    // 创建窗口
-    GLFWwindow* window = glfwCreateWindow(800, 600, "OpenGL Green Box", nullptr, nullptr);
-    if (!window) {
-        std::cerr << "窗口创建失败\n";
-        glfwTerminate();
-        return -1;
-    }
+    GLFWwindow* window = glfwCreateWindow(800, 800, "Snake Game", nullptr, nullptr);
+    if (!window) return -1;
     glfwMakeContextCurrent(window);
     glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
 
-    // 加载 GLAD
-    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
-        std::cerr << "GLAD 初始化失败\n";
-        return -1;
-    }
+    if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
 
-    // ========== 1. 创建顶点着色器 ==========
-    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
-    glCompileShader(vertexShader);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // 检查编译错误
-    int success;
-    glGetShaderiv(vertexShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(vertexShader, 512, nullptr, infoLog);
-        std::cerr << "顶点着色器编译失败:\n" << infoLog << '\n';
-    }
+    // 着色器
+    GLuint vShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vShader, 1, &vertexShaderSource, nullptr);
+    glCompileShader(vShader);
 
-    // ========== 2. 创建片元着色器 ==========
-    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
-    glCompileShader(fragmentShader);
+    GLuint fShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fShader, 1, &fragmentShaderSource, nullptr);
+    glCompileShader(fShader);
 
-    glGetShaderiv(fragmentShader, GL_COMPILE_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetShaderInfoLog(fragmentShader, 512, nullptr, infoLog);
-        std::cerr << "片元着色器编译失败:\n" << infoLog << '\n';
-    }
-
-    // ========== 3. 链接着色器程序 ==========
     GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vertexShader);
-    glAttachShader(shaderProgram, fragmentShader);
+    glAttachShader(shaderProgram, vShader);
+    glAttachShader(shaderProgram, fShader);
     glLinkProgram(shaderProgram);
+    glDeleteShader(vShader);
+    glDeleteShader(fShader);
 
-    glGetProgramiv(shaderProgram, GL_LINK_STATUS, &success);
-    if (!success) {
-        char infoLog[512];
-        glGetProgramInfoLog(shaderProgram, 512, nullptr, infoLog);
-        std::cerr << "着色器程序链接失败:\n" << infoLog << '\n';
-    }
-
-    glDeleteShader(vertexShader);
-    glDeleteShader(fragmentShader);
-
-    // ========== 4. 顶点数据（一个矩形由两个三角形组成） ==========
+    // 顶点数据
     float vertices[] = {
-        // 位置       // 颜色         // 纹理坐标
-        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   0.0f, 0.0f,
-         0.5f, -0.5f,  0.0f, 1.0f, 0.0f,   1.0f, 0.0f,
-         0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   1.0f, 1.0f,
-
-        -0.5f, -0.5f,  1.0f, 0.0f, 0.0f,   0.0f, 0.0f,
-         0.5f,  0.5f,  0.0f, 0.0f, 1.0f,   1.0f, 1.0f,
-        -0.5f,  0.5f,  1.0f, 1.0f, 0.0f,   0.0f, 1.0f
+        // pos        // tex
+        -1.0f / gridWidth, -1.0f / gridHeight, 0.0f, 0.0f,
+         1.0f / gridWidth, -1.0f / gridHeight, 1.0f, 0.0f,
+         1.0f / gridWidth,  1.0f / gridHeight, 1.0f, 1.0f,
+        -1.0f / gridWidth, -1.0f / gridHeight, 0.0f, 0.0f,
+         1.0f / gridWidth,  1.0f / gridHeight, 1.0f, 1.0f,
+        -1.0f / gridWidth,  1.0f / gridHeight, 0.0f, 1.0f
     };
 
-    // ========== 5. 创建 VAO & VBO ==========
-    GLuint VBO, VAO;
+    GLuint VAO, VBO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
-
     glBindVertexArray(VAO);
-
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
     glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
-
-    // 顶点位置: layout(location = 1)
-    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)0);
     glEnableVertexAttribArray(0);
-
-    // 顶点颜色: layout(location = 1)
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(2 * sizeof(float)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // 纹理坐标
-    glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 7 * sizeof(float), (void*)(5 * sizeof(float)));
-    glEnableVertexAttribArray(2);
+    // 加载纹理
+    GLuint snakeHeadTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\snake_head.png");
+    GLuint snakeBodyTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\snake_body.png");
+    GLuint foodTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\food.png");
 
-    // ========== 6. 加载纹理 ==========
+    int offsetLoc = glGetUniformLocation(shaderProgram, "offset");
+    int angleLoc = glGetUniformLocation(shaderProgram, "angle");
 
-    // 生成纹理对象
-    GLuint texture;
-    glGenTextures(1, &texture);
-    glBindTexture(GL_TEXTURE_2D, texture);
-
-    // 设置纹理参数
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
-    // 加载图像数据
-    int width, height, nrChannels;
-    stbi_set_flip_vertically_on_load(true); // OpenGL 的 Y 坐标是反的
-    std::cout << "当前工作目录：" << std::filesystem::current_path() << std::endl;
-    unsigned char* data = stbi_load("C:/dev/snake/CMake贪吃蛇/textures/snake.jpg", &width, &height, &nrChannels, 0);
-    if (data) {
-        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0,
-            nrChannels == 4 ? GL_RGBA : GL_RGB, GL_UNSIGNED_BYTE, data);
-        glGenerateMipmap(GL_TEXTURE_2D);
-    }
-    else {
-        std::cerr << "纹理加载失败！" << std::endl;
-    }
-    stbi_image_free(data);
-
-
-
-
-    // ========== 7. 渲染循环 ==========
+    float lastLogicTime = 0.0f;
     while (!glfwWindowShouldClose(window)) {
-		processInput(window);//获取x,y偏移
+        float currentTime = glfwGetTime();
+        processInput(window);
 
-		int offsetLocation = glGetUniformLocation(shaderProgram, "offset");//获取 uniform 位置
-        int textureLocation = glGetUniformLocation(shaderProgram, "ourTexture");
+        // 移动逻辑
+        static std::deque<Vec2i> oldSnake = snake;
+        if (currentTime - lastLogicTime >= moveInterval) {
+            lastLogicTime = currentTime;
+            oldSnake = snake;
+            Vec2i newHead = { snake.front().x + direction.x, snake.front().y + direction.y };
+            if (newHead.x < 0 || newHead.x >= gridWidth || newHead.y < 0 || newHead.y >= gridHeight) {
+                std::cout << "Game Over\\n";
+                break;
+            }
+            if (newHead == food) {
+                snake.push_front(newHead);
+                food = { rand() % gridWidth, rand() % gridHeight };
+            }
+            else {
+                snake.push_front(newHead);
+                snake.pop_back();
+            }
+        }
 
-        glUniform1i(textureLocation, 0);
-        glUniform2f(offsetLocation, x_offset, y_offset);//
+        float t = (currentTime - lastLogicTime) / moveInterval;
+        if (t > 1.0f) t = 1.0f;
 
-        glClearColor(0.1f, 0.1f, 0.2f, 1.0f);
+        glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         glUseProgram(shaderProgram);
-        glBindTexture(GL_TEXTURE_2D, texture); // 绑定纹理
         glBindVertexArray(VAO);
+
+        // 渲染蛇
+        for (size_t i = 0; i < snake.size(); ++i) {
+            Vec2i oldPos = (i < oldSnake.size()) ? oldSnake[i] : snake[i];
+            Vec2i newPos = snake[i];
+            float x = -1.0f + (oldPos.x + (newPos.x - oldPos.x) * t) * cellSize + cellSize / 2.0f;
+            float y = -1.0f + (oldPos.y + (newPos.y - oldPos.y) * t) * cellSize + cellSize / 2.0f;
+            glUniform2f(offsetLoc, x, y);
+
+            if (i == 0) { // 蛇头
+                float angle = 0.0f;
+                if (direction.x == 1) angle = 90.0f;
+                else if (direction.x == -1) angle = -90.0f;
+                else if (direction.y == 1) angle = 0.0f;
+                else if (direction.y == -1) angle = 180.f;
+                glUniform1f(angleLoc, toRadians(angle));
+                glBindTexture(GL_TEXTURE_2D, snakeHeadTex);
+            }
+            else { // 身体
+                glUniform1f(angleLoc, 0.0f);
+                glBindTexture(GL_TEXTURE_2D, snakeBodyTex);
+            }
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+        }
+
+        // 渲染食物
+        float fx = -1.0f + food.x * cellSize + cellSize / 2.0f;
+        float fy = -1.0f + food.y * cellSize + cellSize / 2.0f;
+        glUniform2f(offsetLoc, fx, fy);
+        glUniform1f(angleLoc, 0.0f);
+        glBindTexture(GL_TEXTURE_2D, foodTex);
         glDrawArrays(GL_TRIANGLES, 0, 6);
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
 
-    // ========== 7. 清理资源 ==========
     glDeleteVertexArrays(1, &VAO);
     glDeleteBuffers(1, &VBO);
     glDeleteProgram(shaderProgram);
-
     glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
