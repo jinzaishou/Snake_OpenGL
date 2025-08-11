@@ -3,10 +3,11 @@
 # 阶段2
 	可视化蛇并且实现蛇的移动
 # 阶段3
-
+	添加蛇吃食物变长的逻辑，绘制了蛇头，蛇身和食物的纹理。增加了蛇头旋转的逻辑。
 # 注意事项
 	glad(graphics libiary Loader and dependcy manager)、glfw(graphics libiary framwork for windows)
 	主函数中导入库需要先导入glad.h，再导入glfw3.h
+	绘制像素纹理的网址：https://www.piskelapp.com/
 	
 # 常用的函数说明：
 

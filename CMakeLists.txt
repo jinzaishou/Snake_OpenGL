@@ -17,6 +17,7 @@ add_subdirectory(external/glfw)
 include_directories(
     external/glfw/include        # GLFW 的头文件
     external/glad/include        # GLAD 的头文件
+    external/glm/
 )
 
 # ========== 添加可执行文件 ==========
@@ -24,7 +25,7 @@ include_directories(
 add_executable(OpenGLSnake
     CMake贪吃蛇.cpp                 # 你的主程序
     external/glad/src/glad.c     # GLAD 的实现文件
-)
+   "MapBorder.cpp")
 
 # ========== 链接需要的库 ==========
 # 告诉编译器：这个项目需要用哪些库（顺序有时很重要）

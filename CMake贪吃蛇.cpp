@@ -1,38 +1,58 @@
 ﻿#define STB_IMAGE_IMPLEMENTATION
 #include "./external/stb/stb_image.h"
-
-#include <deque>
-#include <filesystem>
+#include "MapBorder.h"
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
+#include <glm.hpp>
+#include <gtc/matrix_transform.hpp>
+#include <fstream>
+#include <sstream>
+#include <deque>
 #include <iostream>
 #include <cstdlib>
 #include <ctime>
+#include <cmath>
 
-const int gridWidth = 20;
-const int gridHeight = 20;
-const float cellSize = 2.0f / gridWidth;
+
 
 struct Vec2i {
     int x, y;
     bool operator==(const Vec2i& other) const { return x == other.x && y == other.y; }
 };
+
+float toRadians(float degree) {
+    return degree * 3.14159265f / 180.0f;
+}
+
+void resetGame(); 
+
+enum GameState { MENU, GAME, SETTINGS, EXIT };
+GameState gameState = MENU;
+
+const int gridWidth = 20;
+const int gridHeight = 20;
+const float cellSize = 2.0f / gridWidth;
+float moveInterval = 0.1f;
+float lastLogicTime = 0.0f;
+
+// 蛇
 std::deque<Vec2i> snake = { {10, 7} };
 Vec2i direction = { 1, 0 };
+std::deque<Vec2i> dirQueue;
 Vec2i food = { 5, 5 };
+std::deque<Vec2i> oldSnake;
+bool keyState[4] = { false, false, false, false };
+float headAngle = 0.0f;
 
-float moveInterval = 0.2f;
-float toRadians(float degree) { return degree * 3.14159265f / 180.0f; }
-
-void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
-    glViewport(0, 0, width, height);
-}
-void processInput(GLFWwindow* window) {
-    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS)    direction = { 0, 1 };
-    if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)  direction = { 0, -1 };
-    if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)  direction = { -1, 0 };
-    if (glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) direction = { 1, 0 };
-}
+// 顶点数据
+float vertices[] = {
+    -1.0f / (gridWidth + 1), -1.0f / (gridHeight + 1),  0.0f, 0.0f,
+     1.0f / (gridWidth + 1), -1.0f / (gridHeight + 1),  1.0f, 0.0f,
+     1.0f / (gridWidth + 1),  1.0f / (gridHeight + 1),  1.0f, 1.0f,
+    -1.0f / (gridWidth + 1), -1.0f / (gridHeight + 1),  0.0f, 0.0f,
+     1.0f / (gridWidth + 1),  1.0f / (gridHeight + 1),  1.0f, 1.0f,
+    -1.0f / (gridWidth + 1),  1.0f / (gridHeight + 1),  0.0f, 1.0f
+};
 
 // 顶点着色器
 const char* vertexShaderSource = R"(
@@ -41,7 +61,6 @@ layout(location = 0) in vec2 aPos;
 layout(location = 1) in vec2 aTexCoord;
 
 out vec2 texCoord;
-
 uniform vec2 offset;
 uniform float angle;
 
@@ -60,13 +79,20 @@ const char* fragmentShaderSource = R"(
 #version 330 core
 in vec2 texCoord;
 out vec4 FragColor;
+
+uniform vec3 color;
 uniform sampler2D ourTexture;
+uniform bool useTexture;
+
 void main() {
-    FragColor = texture(ourTexture, texCoord);
+    if(useTexture)
+        FragColor = texture(ourTexture, texCoord);
+    else
+        FragColor = vec4(color, 1.0);
 }
 )";
 
-// 加载纹理函数
+// 纹理加载
 GLuint loadTexture(const char* path) {
     GLuint texture;
     glGenTextures(1, &texture);
@@ -75,14 +101,12 @@ GLuint loadTexture(const char* path) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR_MIPMAP_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
     int width, height, nrChannels;
     stbi_set_flip_vertically_on_load(true);
     unsigned char* data = stbi_load(path, &width, &height, &nrChannels, 0);
     if (data) {
-        glTexImage2D(GL_TEXTURE_2D, 0, (nrChannels == 4 ? GL_RGBA : GL_RGB),
-            width, height, 0, (nrChannels == 4 ? GL_RGBA : GL_RGB),
-            GL_UNSIGNED_BYTE, data);
+        GLenum format = nrChannels == 4 ? GL_RGBA : GL_RGB;
+        glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, data);
         glGenerateMipmap(GL_TEXTURE_2D);
     }
     else {
@@ -92,6 +116,165 @@ GLuint loadTexture(const char* path) {
     return texture;
 }
 
+// 输入处理
+void processInput(GLFWwindow* window, Vec2i currentDir) {
+    // 键盘与方向映射表
+    struct KeyDir { int key; Vec2i dir; Vec2i opposite; };
+    KeyDir keys[4] = {
+        { GLFW_KEY_UP,    { 0,  1}, { 0, -1} },
+        { GLFW_KEY_DOWN,  { 0, -1}, { 0,  1} },
+        { GLFW_KEY_LEFT,  {-1,  0}, { 1,  0} },
+        { GLFW_KEY_RIGHT, { 1,  0}, {-1,  0} }
+    };
+
+    if (gameState == GAME) {
+        for (int i = 0; i < 4; i++) {
+            if (glfwGetKey(window, keys[i].key) == GLFW_PRESS) {
+                // “刚按下”时才触发
+                if (!keyState[i]) {
+                    // 防止反方向掉头
+                    if (!(currentDir.x == keys[i].opposite.x && currentDir.y == keys[i].opposite.y)) {
+                        dirQueue.push_back(keys[i].dir);
+                    }
+                    keyState[i] = true;
+                }
+            }
+            else {
+                // 松开时重置该按键状态
+                keyState[i] = false;
+            }
+        }
+    }
+}
+
+// 更新头部角度
+void updateHeadAngle(Vec2i dir) {
+    if (dir.x == 1 && dir.y == 0) headAngle = 90.0f;
+    else if (dir.x == 0 && dir.y == 1) headAngle = 0.0f;
+    else if (dir.x == -1 && dir.y == 0) headAngle = -90.0f;
+    else if (dir.x == 0 && dir.y == -1) headAngle = 180.0f;
+}
+
+// 菜单
+int menuIndex = 0;
+const int menuCount = 3;
+void processMenu(GLFWwindow* window) {
+    static bool menuPressed = false;
+    if (!menuPressed) {
+        //向上切换
+        if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+            menuIndex = (menuIndex - 1 + menuCount) % menuCount;
+            menuPressed = true;
+        }
+		//向下切换
+        if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+            menuIndex = (menuIndex + 1) % menuCount;
+            menuPressed = true;
+        }
+		//选择菜单项
+        if (glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_PRESS) {
+            if (menuIndex == 0) { resetGame();gameState = GAME; lastLogicTime = glfwGetTime();}
+            else if (menuIndex == 1) gameState = SETTINGS;
+            else if (menuIndex == 2) gameState = EXIT;
+            menuPressed = true;
+        }
+    }
+    if (glfwGetKey(window, GLFW_KEY_UP) == GLFW_RELEASE &&
+        glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_RELEASE &&
+        glfwGetKey(window, GLFW_KEY_ENTER) == GLFW_RELEASE) {
+        menuPressed = false;
+    }
+}
+
+void resetGame() {
+    snake.clear();
+    snake.push_back({ gridWidth / 2, gridHeight / 2 });
+    food = { rand() % (gridWidth - 2) + 1, rand() % (gridHeight - 2) + 1 };
+    moveInterval = 0.1f;
+}
+
+
+GLuint LoadShader(const char* vertexPath, const char* fragmentPath)
+{
+    // 1. 读取文件内容
+    std::string vertexCode;
+    std::string fragmentCode;
+    std::ifstream vShaderFile;
+    std::ifstream fShaderFile;
+
+    vShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+    fShaderFile.exceptions(std::ifstream::failbit | std::ifstream::badbit);
+
+    try {
+        vShaderFile.open(vertexPath);
+        fShaderFile.open(fragmentPath);
+        std::stringstream vShaderStream, fShaderStream;
+
+        vShaderStream << vShaderFile.rdbuf();
+        fShaderStream << fShaderFile.rdbuf();
+
+        vShaderFile.close();
+        fShaderFile.close();
+
+        vertexCode = vShaderStream.str();
+        fragmentCode = fShaderStream.str();
+    }
+    catch (std::ifstream::failure& e) {
+        std::cerr << "ERROR: Shader file not successfully read: "
+            << e.what() << std::endl;
+        return 0;
+    }
+
+    const char* vShaderCode = vertexCode.c_str();
+    const char* fShaderCode = fragmentCode.c_str();
+
+    // 2. 编译着色器
+    GLuint vertex, fragment;
+    GLint success;
+    char infoLog[512];
+
+    // 顶点着色器
+    vertex = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertex, 1, &vShaderCode, nullptr);
+    glCompileShader(vertex);
+
+    glGetShaderiv(vertex, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(vertex, 512, nullptr, infoLog);
+        std::cerr << "ERROR: Vertex shader compilation failed\n" << infoLog << std::endl;
+    }
+
+    // 片段着色器
+    fragment = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragment, 1, &fShaderCode, nullptr);
+    glCompileShader(fragment);
+
+    glGetShaderiv(fragment, GL_COMPILE_STATUS, &success);
+    if (!success) {
+        glGetShaderInfoLog(fragment, 512, nullptr, infoLog);
+        std::cerr << "ERROR: Fragment shader compilation failed\n" << infoLog << std::endl;
+    }
+
+    // 3. 链接着色器程序
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vertex);
+    glAttachShader(program, fragment);
+    glLinkProgram(program);
+
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    if (!success) {
+        glGetProgramInfoLog(program, 512, nullptr, infoLog);
+        std::cerr << "ERROR: Shader program linking failed\n" << infoLog << std::endl;
+    }
+
+    // 4. 删除中间着色器对象
+    glDeleteShader(vertex);
+    glDeleteShader(fragment);
+
+    return program;
+}
+
+
 int main() {
     srand((unsigned)time(0));
     if (!glfwInit()) return -1;
@@ -99,44 +282,38 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
     glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(800, 800, "Snake Game", nullptr, nullptr);
+
+
+    GLFWwindow* window = glfwCreateWindow(800, 800, "Snake with Menu", nullptr, nullptr);
     if (!window) return -1;
     glfwMakeContextCurrent(window);
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
+
+    std::cout << "OpenGL version: " << glGetString(GL_VERSION) << std::endl;
+    std::cout << "GLSL version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
 
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-    // 着色器
-    GLuint vShader = glCreateShader(GL_VERTEX_SHADER);
-    glShaderSource(vShader, 1, &vertexShaderSource, nullptr);
-    glCompileShader(vShader);
+    GLuint vertexShader = glCreateShader(GL_VERTEX_SHADER);
+    glShaderSource(vertexShader, 1, &vertexShaderSource, nullptr);
+    glCompileShader(vertexShader);
 
-    GLuint fShader = glCreateShader(GL_FRAGMENT_SHADER);
-    glShaderSource(fShader, 1, &fragmentShaderSource, nullptr);
-    glCompileShader(fShader);
+    GLuint fragmentShader = glCreateShader(GL_FRAGMENT_SHADER);
+    glShaderSource(fragmentShader, 1, &fragmentShaderSource, nullptr);
+    glCompileShader(fragmentShader);
 
     GLuint shaderProgram = glCreateProgram();
-    glAttachShader(shaderProgram, vShader);
-    glAttachShader(shaderProgram, fShader);
+    glAttachShader(shaderProgram, vertexShader);
+    glAttachShader(shaderProgram, fragmentShader);
     glLinkProgram(shaderProgram);
-    glDeleteShader(vShader);
-    glDeleteShader(fShader);
+    glDeleteShader(vertexShader);
+    glDeleteShader(fragmentShader);
 
-    // 顶点数据
-    float vertices[] = {
-        // pos        // tex
-        -1.0f / gridWidth, -1.0f / gridHeight, 0.0f, 0.0f,
-         1.0f / gridWidth, -1.0f / gridHeight, 1.0f, 0.0f,
-         1.0f / gridWidth,  1.0f / gridHeight, 1.0f, 1.0f,
-        -1.0f / gridWidth, -1.0f / gridHeight, 0.0f, 0.0f,
-         1.0f / gridWidth,  1.0f / gridHeight, 1.0f, 1.0f,
-        -1.0f / gridWidth,  1.0f / gridHeight, 0.0f, 1.0f
-    };
+    GLuint borderShader = LoadShader("C:/dev/snake/CMake贪吃蛇/shaders/border.vert", "C:/dev/snake/CMake贪吃蛇/shaders/border.frag");
+    MapBorder border(-0.9f, 0.9f, 0.9f, -0.9f);
 
-    GLuint VAO, VBO;
+    GLuint VBO, VAO;
     glGenVertexArrays(1, &VAO);
     glGenBuffers(1, &VBO);
     glBindVertexArray(VAO);
@@ -147,88 +324,113 @@ int main() {
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void*)(2 * sizeof(float)));
     glEnableVertexAttribArray(1);
 
-    // 加载纹理
-    GLuint snakeHeadTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\snake_head.png");
-    GLuint snakeBodyTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\snake_body.png");
-    GLuint foodTex = loadTexture("C:\\dev\\snake\\CMake贪吃蛇\\textures\\food.png");
+    GLuint texHead = loadTexture("C:/dev/snake/CMake贪吃蛇/textures/snake_head.png");
+    GLuint texBody = loadTexture("C:/dev/snake/CMake贪吃蛇/textures/snake_body1.png");
+    GLuint texFood = loadTexture("C:/dev/snake/CMake贪吃蛇/textures/food.png");
 
     int offsetLoc = glGetUniformLocation(shaderProgram, "offset");
     int angleLoc = glGetUniformLocation(shaderProgram, "angle");
+    int colorLoc = glGetUniformLocation(shaderProgram, "color");
+    int useTexLoc = glGetUniformLocation(shaderProgram, "useTexture");
 
-    float lastLogicTime = 0.0f;
     while (!glfwWindowShouldClose(window)) {
-        float currentTime = glfwGetTime();
-        processInput(window);
 
-        // 移动逻辑
-        static std::deque<Vec2i> oldSnake = snake;
-        if (currentTime - lastLogicTime >= moveInterval) {
-            lastLogicTime = currentTime;
-            oldSnake = snake;
-            Vec2i newHead = { snake.front().x + direction.x, snake.front().y + direction.y };
-            if (newHead.x < 0 || newHead.x >= gridWidth || newHead.y < 0 || newHead.y >= gridHeight) {
-                std::cout << "Game Over\\n";
-                break;
-            }
-            if (newHead == food) {
-                snake.push_front(newHead);
-                food = { rand() % gridWidth, rand() % gridHeight };
-            }
-            else {
-                snake.push_front(newHead);
-                snake.pop_back();
-            }
+        if (snake.size() % 4==0) {
+			moveInterval = 0.1f-(snake.size()/4)*0.01; // 加快速度
         }
-
-        float t = (currentTime - lastLogicTime) / moveInterval;
-        if (t > 1.0f) t = 1.0f;
-
-        glClearColor(0.1f, 0.2f, 0.3f, 1.0f);
+        float currentTime = glfwGetTime();
+        glClearColor(0.2f, 0.3f, 0.25f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
-
         glUseProgram(shaderProgram);
         glBindVertexArray(VAO);
 
-        // 渲染蛇
-        for (size_t i = 0; i < snake.size(); ++i) {
-            Vec2i oldPos = (i < oldSnake.size()) ? oldSnake[i] : snake[i];
-            Vec2i newPos = snake[i];
-            float x = -1.0f + (oldPos.x + (newPos.x - oldPos.x) * t) * cellSize + cellSize / 2.0f;
-            float y = -1.0f + (oldPos.y + (newPos.y - oldPos.y) * t) * cellSize + cellSize / 2.0f;
-            glUniform2f(offsetLoc, x, y);
-
-            if (i == 0) { // 蛇头
-                float angle = 0.0f;
-                if (direction.x == 1) angle = 90.0f;
-                else if (direction.x == -1) angle = -90.0f;
-                else if (direction.y == 1) angle = 0.0f;
-                else if (direction.y == -1) angle = 180.f;
-                glUniform1f(angleLoc, toRadians(angle));
-                glBindTexture(GL_TEXTURE_2D, snakeHeadTex);
-            }
-            else { // 身体
+        if (gameState == MENU) {
+            processMenu(window);
+            for (int i = 0; i < menuCount; ++i) {
+                float y = 0.4f - i * 0.3f;
+                glUniform2f(offsetLoc, 0.0f, y);
                 glUniform1f(angleLoc, 0.0f);
-                glBindTexture(GL_TEXTURE_2D, snakeBodyTex);
+                if (i == menuIndex)
+                    glUniform3f(colorLoc, 1.0f, 1.0f, 0.0f);
+                else
+                    glUniform3f(colorLoc, 0.6f, 0.6f, 0.6f);
+                glUniform1i(useTexLoc, 0);
+                glDrawArrays(GL_TRIANGLES, 0, 6);
             }
-            glDrawArrays(GL_TRIANGLES, 0, 6);
         }
+        else if (gameState == GAME) {
 
-        // 渲染食物
-        float fx = -1.0f + food.x * cellSize + cellSize / 2.0f;
-        float fy = -1.0f + food.y * cellSize + cellSize / 2.0f;
-        glUniform2f(offsetLoc, fx, fy);
-        glUniform1f(angleLoc, 0.0f);
-        glBindTexture(GL_TEXTURE_2D, foodTex);
-        glDrawArrays(GL_TRIANGLES, 0, 6);
+            processInput(window, direction);
+            if (currentTime - lastLogicTime >= moveInterval) {
+                lastLogicTime = currentTime;
+                oldSnake = snake;
+                if (!dirQueue.empty()) {
+                    Vec2i nextDir = dirQueue.front(); dirQueue.pop_front();
+                    if (!(direction.x == -nextDir.x && direction.y == -nextDir.y))
+                        direction = nextDir;
+                }
+                updateHeadAngle(direction);
+                Vec2i newHead = { snake.front().x + direction.x, snake.front().y + direction.y };
+                if (newHead.x < 1 || newHead.x >= gridWidth-1 || newHead.y < 1 || newHead.y >= gridHeight-1) {
+                    std::cout << "撞墙，游戏结束！\n";
+                    gameState = MENU; // 返回菜单
+                }
+                if (newHead == food) {
+                    snake.push_front(newHead);
+                    food = { rand() % (gridWidth - 2) + 1, rand() % (gridHeight-2) + 1 };
+                }
+                else {
+                    snake.push_front(newHead);
+                    snake.pop_back();
+                }
+            }
+            float t = (currentTime - lastLogicTime) / moveInterval;
+            if (t > 1.0f) t = 1.0f;
+
+            for (size_t i = 0; i < snake.size(); ++i) {
+                Vec2i oldPos = (i < oldSnake.size()) ? oldSnake[i] : snake[i];
+                Vec2i newPos = snake[i];
+                float x = -1.0f + (oldPos.x + (newPos.x - oldPos.x) * t) * cellSize + cellSize / 2.0f;
+                float y = -1.0f + (oldPos.y + (newPos.y - oldPos.y) * t) * cellSize + cellSize / 2.0f;
+                glUniform2f(offsetLoc, x, y);
+                if (i == 0) {
+                    glBindTexture(GL_TEXTURE_2D, texHead);
+                    glUniform1i(useTexLoc, 1);
+                    glUniform1f(angleLoc, toRadians(headAngle));
+                }
+                else {
+                    glBindTexture(GL_TEXTURE_2D, texBody);
+                    glUniform1i(useTexLoc, 1);
+                    glUniform1f(angleLoc, 0.0f);
+                }
+                glDrawArrays(GL_TRIANGLES, 0, 6);
+            }
+            float fx = -1.0f + food.x * cellSize + cellSize / 2.0f;
+            float fy = -1.0f + food.y * cellSize + cellSize / 2.0f;
+            glUniform2f(offsetLoc, fx, fy);
+            glBindTexture(GL_TEXTURE_2D, texFood);
+            glUniform1i(useTexLoc, 1);
+            glUniform1f(angleLoc, 0.0f);
+            glUseProgram(shaderProgram);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            glUseProgram(borderShader);
+            border.Draw(borderShader);
+        }
+        else if (gameState == SETTINGS) {
+            glUniform2f(offsetLoc, 0.0f, 0.0f);
+            glUniform1f(angleLoc, 0.0f);
+            glUniform3f(colorLoc, 0.2f, 0.7f, 1.0f);
+            glUniform1i(useTexLoc, 0);
+            glDrawArrays(GL_TRIANGLES, 0, 6);
+            if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) gameState = MENU;
+        }
+        else if (gameState == EXIT) {
+            glfwSetWindowShouldClose(window, true);
+        }
 
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
-
-    glDeleteVertexArrays(1, &VAO);
-    glDeleteBuffers(1, &VBO);
-    glDeleteProgram(shaderProgram);
-    glfwDestroyWindow(window);
     glfwTerminate();
     return 0;
 }
